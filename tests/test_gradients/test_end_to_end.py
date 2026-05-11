@@ -23,14 +23,15 @@ def test_forward_runs_and_shapes_match():
 def test_gradient_wrt_rue():
     weather = make_constant_weather(batch_size=1, n_days=80, dtype=torch.float64)
     crop_params = CropParameters().to(dtype=torch.float64)
-    crop_params.rue = nn.Parameter(torch.tensor(3.0, dtype=torch.float64))
+    # RUE is now sourced from ruetb(DVS) per SIMPLACE RadiationUseEfficiency
+    crop_params.ruetb = nn.Parameter(crop_params.ruetb.clone().detach())
     model = Lintul5Model(crop_params=crop_params)
     model = model.double()
     out = model(weather, start_doy=60)
     out.yield_.sum().backward()
-    assert crop_params.rue.grad is not None
-    assert torch.isfinite(crop_params.rue.grad)
-    assert crop_params.rue.grad.abs().item() >= 0.0
+    assert crop_params.ruetb.grad is not None
+    assert torch.isfinite(crop_params.ruetb.grad).all()
+    assert crop_params.ruetb.grad.abs().sum().item() > 0.0
 
 
 def test_gradient_wrt_tsum1():

@@ -1,18 +1,38 @@
-"""Radiation use efficiency and gross assimilation.
+"""Radiation use efficiency.
+
+Mirrors the SIMPLACE ``RadiationUseEfficiency.java`` component, which only
+computes ``RUE`` and the overall correction factor ``RTMCO``. The gross
+biomass growth rate (``GTOTAL``) is produced downstream in
+``Lintul5.java``'s biomass block (``LintulFunctions.GROWTH``) and lives in
+the partitioning / model-level code, not here.
 
 References:
-    SIMPLACE ``RadiationUseEfficiency.java`` and biomass block of
-    ``Lintul5.java``.
+    SIMPLACE ``RadiationUseEfficiency.java`` (``process()`` routine).
 
 Equations:
-    Gross biomass growth rate (daily):
+    Effective daytime temperature (SIMPLACE customisable mean):
 
     $$
-    \\text{GTOTAL} = \\text{RUE} \\cdot f_T(T) \\cdot f_{CO_2} \\cdot
-    \\text{NSTRESS} \\cdot \\text{TRANRF} \\cdot \\text{PARINT}
+    \\text{DTEMP} = \\text{TMAX} - f \\cdot (\\text{TMAX} - \\text{TMIN})
     $$
 
-    where ``RUE`` has units of g dry matter per MJ intercepted PAR.
+    where ``f`` is ``cDayTempFactor`` (default 0.25, i.e. daytime mean).
+
+    Temperature × CO\\(_2\\) correction factor on RUE:
+
+    $$
+    \\text{RTMCO} = \\text{TMPFTB}(\\text{DTEMP}) \\cdot
+                    \\text{TMNFTB}(\\text{TMIN}) \\cdot
+                    \\text{COTB}(\\text{CO}_2)
+    $$
+
+    DVS-dependent radiation use efficiency (replaces the static scalar):
+
+    $$
+    \\text{RUE} = \\text{cScaleFactorRUE} \\cdot \\text{RUETB}(\\text{DVS})
+    $$
+
+    ``RUE`` has units of g dry matter per MJ intercepted PAR.
 """
 
 from __future__ import annotations
@@ -25,56 +45,63 @@ from torchcrop.parameters.crop_params import CropParameters
 
 
 class Photosynthesis(nn.Module):
-    """Radiation use efficiency and biomass assimilation."""
+    """Radiation use efficiency component (SIMPLACE ``RadiationUseEfficiency``).
+
+    Outputs ``RUE`` from ``ruetb(DVS)`` and an overall correction factor
+    ``RTMCO`` that combines daytime-temperature, minimum-temperature and
+    CO\\(_2\\) responses. ``parint``, ``tranrf`` and ``nstress`` are *not*
+    consumed here — they enter the GTOTAL formula in the downstream biomass
+    block.
+    """
 
     def forward(
         self,
-        parint: torch.Tensor,
-        davtmp: torch.Tensor,
-        tranrf: torch.Tensor,
-        nstress: torch.Tensor,
+        tmax: torch.Tensor,
+        tmin: torch.Tensor,
+        dvs: torch.Tensor,
         params: CropParameters,
     ) -> dict[str, torch.Tensor]:
-        """Compute gross daily biomass production.
+        """Compute RUE and the RTMCO correction factor.
 
         Args:
-            parint: PAR intercepted by the canopy [MJ m⁻² d⁻¹], shape
-                ``[B]``.
-            davtmp: Mean daily air temperature [°C], shape ``[B]``.
-            tranrf: Water-stress reduction factor in ``[0, 1]``, shape
-                ``[B]``.
-            nstress: Nutrient-stress reduction factor in ``[0, 1]``, shape
-                ``[B]``.
-            params: Crop parameters; uses ``rue``, ``tmpf_tb``, ``co2``.
+            tmax: Daily maximum air temperature [°C], shape ``[B]``.
+            tmin: Daily minimum air temperature [°C], shape ``[B]``.
+            dvs: Development stage [-] (0–2), shape ``[B]``.
+            params: Crop parameters; uses ``ruetb``, ``scale_factor_rue``,
+                ``tmpftb``, ``tmnftb``, ``cotb``, ``co2``, ``day_temp_factor``.
 
         Returns:
-            Dict of ``[B]`` tensors grouped as follows.
+            Dict of ``[B]`` tensors:
 
-            Rate variables (consumed by `Partitioning`):
-
-                * ``gtotal`` [g DM m⁻² d⁻¹] — Gross total biomass
-                  production rate
-                  ``= rue_eff * parint * tranrf * nstress``. Split into
-                  organ-specific growth rates ``g_lv``, ``g_st``,
-                  ``g_root``, ``g_so`` by the partitioning module.
-
-            Diagnostics:
-
-                * ``rue_eff`` [g MJ⁻¹] — Effective radiation use
-                  efficiency after temperature and CO₂ adjustments.
-                * ``tmp_factor`` [-] — Temperature reduction factor on RUE
-                  from ``AFGEN(tmpf_tb, T_avg)``, in ``[0, 1]``.
-                * ``co2_factor`` [-] — CO₂ enhancement factor (1.0 at 360
-                  ppm, up to 1.3 at 700 ppm).
+                * ``rue`` [g MJ⁻¹] — DVS-dependent radiation use efficiency
+                  ``cScaleFactorRUE · RUETB(DVS)``.
+                * ``rtmco`` [-] — Overall correction factor
+                  ``RTMP · RCO``.
+                * ``rco`` [-] — CO₂ correction factor ``COTB(CO₂)``.
+                * ``rtmp`` [-] — Temperature correction factor
+                  ``TMPFTB(DTEMP) · TMNFTB(TMIN)``.
+                * ``dtemp`` [°C] — Effective daytime temperature
+                  ``TMAX − f·(TMAX − TMIN)``.
         """
-        tmp_factor = interpolate(params.tmpf_tb, davtmp)
-        # Simple CO2 response (linear around reference 360 ppm, saturates at 700)
-        co2_factor = 1.0 + 0.3 * torch.clamp((params.co2 - 360.0) / (700.0 - 360.0), 0.0, 1.0)
-        rue_eff = params.rue * tmp_factor * co2_factor
-        gtotal = rue_eff * parint * tranrf * nstress
+        # DVS-dependent base RUE (replaces the static scalar params.rue)
+        rue = params.scale_factor_rue * interpolate(params.ruetb, dvs)
+
+        # CO2 correction
+        co2 = params.co2.expand_as(tmax) if params.co2.dim() == 0 else params.co2
+        rco = interpolate(params.cotb, co2)
+
+        # Effective daytime temperature, customisable via day_temp_factor
+        dtemp = tmax - params.day_temp_factor * (tmax - tmin)
+
+        # Temperature reduction: daytime-temp × low-min-temp
+        rtmp = interpolate(params.tmpftb, dtemp) * interpolate(params.tmnftb, tmin)
+
+        rtmco = rtmp * rco
+
         return {
-            "rue_eff": rue_eff,
-            "gtotal": gtotal,
-            "tmp_factor": tmp_factor,
-            "co2_factor": co2_factor,
+            "rue": rue,
+            "rtmco": rtmco,
+            "rco": rco,
+            "rtmp": rtmp,
+            "dtemp": dtemp,
         }

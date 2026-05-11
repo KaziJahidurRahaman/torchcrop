@@ -345,14 +345,21 @@ class Lintul5Model(nn.Module):
         #      using a "no nutrient stress" GTOTAL to compute demand, then
         #      finalise with the resulting nstress.
         photo_pre = self.photosynthesis(
-            parint=irrad_out["parint"],
-            davtmp=davtmp,
-            tranrf=tranrf,
-            nstress=torch.ones_like(davtmp),
+            tmax=tmax,
+            tmin=tmin,
+            dvs=state.dvs,
             params=crop_params,
         )
+        # GTOTAL = RUE * RTMCO * PARINT * TRANRF * NSTRESS
+        # (LintulFunctions.GROWTH; NSTRESS=1 here for the pre-step)
+        gtotal_pre = (
+            photo_pre["rue"]
+            * photo_pre["rtmco"]
+            * irrad_out["parint"]
+            * tranrf
+        )
         part_pre = self.partitioning(
-            state=state, gtotal=photo_pre["gtotal"], params=crop_params
+            state=state, gtotal=gtotal_pre, params=crop_params
         )
         nut = self.nutrient_demand(
             state=state,
@@ -367,13 +374,22 @@ class Lintul5Model(nn.Module):
 
         # 8. Photosynthesis (final) with nutrient + water stress
         photo = self.photosynthesis(
-            parint=irrad_out["parint"],
-            davtmp=davtmp,
-            tranrf=tranrf,
-            nstress=self.stress(tranrf, nstress) / torch.clamp(tranrf, min=1e-6),
+            tmax=tmax,
+            tmin=tmin,
+            dvs=state.dvs,
             params=crop_params,
         )
-        gtotal = photo["gtotal"]
+        # GTOTAL = RUE * RTMCO * PARINT * min(TRANRF, NPKREF)
+        # The combined stress is produced by self.stress; divide-cancel keeps
+        # the existing semantics of stress() returning TRANRF*combined.
+        combined_stress = self.stress(tranrf, nstress) / torch.clamp(tranrf, min=1e-6)
+        gtotal = (
+            photo["rue"]
+            * photo["rtmco"]
+            * irrad_out["parint"]
+            * tranrf
+            * combined_stress
+        )
 
         # Residual correction on gtotal
         if "photosynthesis" in self.residual_modules:
