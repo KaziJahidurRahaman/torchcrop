@@ -73,15 +73,15 @@ class Photosynthesis(nn.Module):
         Returns:
             Dict of ``[B]`` tensors:
 
-                * ``rue`` [g MJ⁻¹] — DVS-dependent radiation use efficiency
-                  ``cScaleFactorRUE · RUETB(DVS)``.
-                * ``rtmco`` [-] — Overall correction factor
-                  ``RTMP · RCO``.
-                * ``rco`` [-] — CO₂ correction factor ``COTB(CO₂)``.
-                * ``rtmp`` [-] — Temperature correction factor
-                  ``TMPFTB(DTEMP) · TMNFTB(TMIN)``.
-                * ``dtemp`` [°C] — Effective daytime temperature
-                  ``TMAX − f·(TMAX − TMIN)``.
+            * ``rue`` [g MJ⁻¹] — DVS-dependent radiation use efficiency
+              ``cScaleFactorRUE · RUETB(DVS)``.
+            * ``rtmco`` [-] — Overall correction factor
+              ``RTMP · RCO``.
+            * ``rco`` [-] — CO₂ correction factor ``COTB(CO₂)``.
+            * ``rtmp`` [-] — Temperature correction factor
+              ``TMPFTB(DTEMP) · TMNFTB(TMIN)``.
+            * ``dtemp`` [°C] — Effective daytime temperature
+              ``TMAX − f·(TMAX − TMIN)``.
         """
         # DVS-dependent base RUE (replaces the static scalar params.rue)
         rue = params.scale_factor_rue * interpolate(params.ruetb, dvs)
