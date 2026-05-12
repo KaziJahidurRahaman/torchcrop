@@ -7,7 +7,7 @@ References:
     * ``LintulFunctions.RELGR`` — converts the (possibly stress-modified)
       partitioning fractions into per-organ growth rates.
 
-Equations:
+Design:
     The baseline fractions ``FRTWET``, ``FLVT``, ``FSTT``, ``FSOT`` are read from
     the interpolation tables ``frtb``, ``fltb``, ``fstb``, ``fotb`` at the
     current DVS. ``SUBPAR`` then adjusts them depending on which stress is
@@ -21,6 +21,7 @@ Equations:
     stems (``FST ← FSTT + FLVT − FLV``). Roots and storage organs are
     unchanged.
 
+Equations:
     Final organ growth rates follow ``RELGR``:
 
     $$
