@@ -358,8 +358,14 @@ class Lintul5Model(nn.Module):
             * irrad_out["parint"]
             * tranrf
         )
+        # Pre-step: NNI is not yet known, so assume no N stress (nni=1).
+        # TRANRF is already known and feeds the water-stress branch of SUBPAR.
         part_pre = self.partitioning(
-            state=state, gtotal=gtotal_pre, params=crop_params
+            state=state,
+            gtotal=gtotal_pre,
+            params=crop_params,
+            tranrf=tranrf,
+            nni=torch.ones_like(tranrf),
         )
         nut = self.nutrient_demand(
             state=state,
@@ -400,8 +406,15 @@ class Lintul5Model(nn.Module):
             gtotal = gtotal + self.residual_modules["photosynthesis"](ctx).squeeze(-1)
             gtotal = torch.clamp(gtotal, min=0.0)
 
-        # 9. Partitioning
-        part = self.partitioning(state=state, gtotal=gtotal, params=crop_params)
+        # 9. Partitioning (final, with water and N stress fed into SUBPAR;
+        # nstress here is the NPK index used as a proxy for NNI).
+        part = self.partitioning(
+            state=state,
+            gtotal=gtotal,
+            params=crop_params,
+            tranrf=tranrf,
+            nni=nstress,
+        )
 
         # 10. Leaf dynamics
         leaf = self.leaf_dynamics(
