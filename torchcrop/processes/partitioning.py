@@ -7,29 +7,30 @@ References:
     * ``LintulFunctions.RELGR`` — converts the (possibly stress-modified)
       partitioning fractions into per-organ growth rates.
 
-The baseline fractions ``FRTWET``, ``FLVT``, ``FSTT``, ``FSOT`` are read from
-the interpolation tables ``frtb``, ``fltb``, ``fstb``, ``fotb`` at the
-current DVS. ``SUBPAR`` then adjusts them depending on which stress is
-limiting:
+Equations:
+    The baseline fractions ``FRTWET``, ``FLVT``, ``FSTT``, ``FSOT`` are read from
+    the interpolation tables ``frtb``, ``fltb``, ``fstb``, ``fotb`` at the
+    current DVS. ``SUBPAR`` then adjusts them depending on which stress is
+    limiting:
 
-* **Water stress more severe** (``TRANRF < NNI``): roots receive a larger
-  share via ``FRTMOD = max(1, 1/(TRANRF + 0.5))``, capped at
-  ``FRT ≤ 0.6``. Above-ground fractions are unchanged.
-* **N stress more severe** (otherwise): leaf allocation is multiplied by
-  ``FLVMOD = exp(-NPART · (1 − NNI))``; the deficit is re-routed to
-  stems (``FST ← FSTT + FLVT − FLV``). Roots and storage organs are
-  unchanged.
+    * **Water stress more severe** (``TRANRF < NNI``): roots receive a larger
+    share via ``FRTMOD = max(1, 1/(TRANRF + 0.5))``, capped at
+    ``FRT ≤ 0.6``. Above-ground fractions are unchanged.
+    * **N stress more severe** (otherwise): leaf allocation is multiplied by
+    ``FLVMOD = exp(-NPART · (1 − NNI))``; the deficit is re-routed to
+    stems (``FST ← FSTT + FLVT − FLV``). Roots and storage organs are
+    unchanged.
 
-Final organ growth rates follow ``RELGR``:
+    Final organ growth rates follow ``RELGR``:
 
-$$
-\\begin{aligned}
-G_{\\text{root}} &= G_{\\text{total}} \\cdot F_{rt} \\\\
-G_{\\text{lv}}   &= G_{\\text{total}} \\cdot (1 - F_{rt}) \\cdot F_{lv} \\\\
-G_{\\text{st}}   &= G_{\\text{total}} \\cdot (1 - F_{rt}) \\cdot F_{st} \\\\
-G_{\\text{so}}   &= G_{\\text{total}} \\cdot (1 - F_{rt}) \\cdot F_{so}
-\\end{aligned}
-$$
+    $$
+    \\begin{aligned}
+    G_{\\text{root}} &= G_{\\text{total}} \\cdot F_{rt} \\\\
+    G_{\\text{lv}}   &= G_{\\text{total}} \\cdot (1 - F_{rt}) \\cdot F_{lv} \\\\
+    G_{\\text{st}}   &= G_{\\text{total}} \\cdot (1 - F_{rt}) \\cdot F_{st} \\\\
+    G_{\\text{so}}   &= G_{\\text{total}} \\cdot (1 - F_{rt}) \\cdot F_{so}
+    \\end{aligned}
+    $$
 """
 
 from __future__ import annotations
