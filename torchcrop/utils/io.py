@@ -18,7 +18,7 @@ def make_constant_weather(
     tmin: float = 10.0,
     tmax: float = 20.0,
     irrad: float = 15.0,
-    rain: float = 2.0,
+    rain: float = 4.0,
     vp: float = 1.2,
     wind: float = 2.0,
     start_doy: int = 1,
@@ -34,7 +34,11 @@ def make_constant_weather(
         tmin: Constant minimum daily temperature [°C].
         tmax: Constant maximum daily temperature [°C].
         irrad: Constant solar radiation [MJ m⁻² d⁻¹].
-        rain: Constant daily precipitation [mm d⁻¹].
+        rain: Constant daily precipitation [mm d⁻¹]. Default ``4.0`` is
+            chosen so that a 150-day run produces an agronomically
+            plausible wheat yield (≈ 240 g m⁻²); values below ≈ 3 mm d⁻¹
+            put the model into a drought-failed regime where TRANRF
+            collapses to zero and WSO never accumulates.
         vp: Constant vapour pressure [kPa].
         wind: Constant wind speed [m s⁻¹].
         start_doy: Day of year for the first simulated day; ``doy``

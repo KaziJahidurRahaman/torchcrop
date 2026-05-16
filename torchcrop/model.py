@@ -152,12 +152,17 @@ class Lintul5Model(nn.Module):
             dslri=3.0,
             dsosi=0.0,
         )
-        # Seed leaf mass so that LAI growth has a substrate post-emergence
-        laii = float(self.crop_params.laii.detach().cpu().item())
-        sla = float(self.crop_params.sla.detach().cpu().item())
-        wlv0 = torch.full_like(state.wlv, laii / max(sla, 1e-6))
-        lai0 = torch.full_like(state.lai, laii)
-        return state.replace(wlv=wlv0, lai=lai0)
+        # Sowing-day state: bare soil, no canopy. The Lintul5.java
+        # initValues block (lines 793–810) seeds WLVGI/WSTI/WRTI/WSOI/LAII,
+        # but in SIMPLACE it runs on iDoSow and is implicitly *the*
+        # emergence event (Lintul5.java:1047). torchcrop simulates the
+        # sowing→emergence interval explicitly via tsump/tsumem in
+        # Phenology, so we leave biomass pools at zero here and inject
+        # the Java initValues deltas as a one-shot rate in
+        # `_compute_rates_dispatch` on the day tsump first crosses
+        # tsumem (LAI is bootstrapped separately by the GLA emergence
+        # branch in LeafDynamics).
+        return state
 
     def forward(
         self,
@@ -351,11 +356,14 @@ class Lintul5Model(nn.Module):
             params=crop_params,
         )
         # GTOTAL = RUE * RTMCO * PARINT * TRANRF * NSTRESS
-        # (LintulFunctions.GROWTH; NSTRESS=1 here for the pre-step)
+        # (LintulFunctions.GROWTH; NSTRESS=1 here for the pre-step).
+        # PARINT is in J m-2 d-1; SIMPLACE GROWTH expects MJ PAR m-2 d-1
+        # (LintulFunctions.java:852), so we convert here.
+        parint_mj = irrad_out["parint"] * 1e-6
         gtotal_pre = (
             photo_pre["rue"]
             * photo_pre["rtmco"]
-            * irrad_out["parint"]
+            * parint_mj
             * tranrf
         )
         # Pre-step: NNI is not yet known, so assume no N stress (nni=1).
@@ -392,7 +400,7 @@ class Lintul5Model(nn.Module):
         gtotal = (
             photo["rue"]
             * photo["rtmco"]
-            * irrad_out["parint"]
+            * parint_mj
             * tranrf
             * combined_stress
         )
@@ -421,6 +429,7 @@ class Lintul5Model(nn.Module):
             state=state,
             g_lv=part["g_lv"],
             dtsu=pheno["dtsu"],
+            davtmp=davtmp,
             tranrf=tranrf,
             nstress=nstress,
             params=crop_params,
@@ -473,6 +482,44 @@ class Lintul5Model(nn.Module):
             "nstress": nstress,
             "gtotal": gtotal,
         }
+
+        # ---- Emergence-day bootstrap (Java Lintul5.java initValues,
+        # lines 793–810). Fires once per batch element on the step where
+        # tsump first crosses tsumem; injects WLVGI/WSTI/WRTI/WSOI and
+        # LAII = WLVGI · scale_factor_sla · SLATB(DVSI) as one-shot
+        # deltas, matching the SIMPLACE convention that the emergence
+        # event (iDoSow in Java) instantly mobilises seed reserves into
+        # a juvenile-canopy state. The resulting one-day LAI jump is
+        # part of the Lintul5 abstraction; if you need a gradient
+        # sowing-to-canopy ramp instead, lower `crop_params.tdwi` (less
+        # seed reserve) or raise `crop_params.rgrl` (faster juvenile
+        # expansion).
+        from torchcrop.functions import interpolate
+        dvsi = crop_params.dvsi
+        tdwi = crop_params.tdwi
+        x = dvsi.reshape(1) if dvsi.dim() == 0 else dvsi
+        frtb_d = interpolate(crop_params.frtb, x).reshape(())
+        fltb_d = interpolate(crop_params.fltb, x).reshape(())
+        fstb_d = interpolate(crop_params.fstb, x).reshape(())
+        fotb_d = interpolate(crop_params.fotb, x).reshape(())
+        sla_d = interpolate(crop_params.slatb, x).reshape(())
+        wrti = frtb_d * tdwi
+        tagb = tdwi - wrti
+        wlvgi = fltb_d * tagb
+        wsti = fstb_d * tagb
+        wsoi = fotb_d * tagb
+        laii_dyn = wlvgi * crop_params.scale_factor_sla * sla_d
+
+        tsump_next = state.tsump + rates["tsump_rate"] * self.engine.dt
+        emerg_now = (
+            (state.tsump < crop_params.tsumem) & (tsump_next >= crop_params.tsumem)
+        ).to(davtmp.dtype)
+        rates["wlv_rate"] = rates["wlv_rate"] + emerg_now * wlvgi / self.engine.dt
+        rates["wst_rate"] = rates["wst_rate"] + emerg_now * wsti / self.engine.dt
+        rates["wrt_rate"] = rates["wrt_rate"] + emerg_now * wrti / self.engine.dt
+        rates["wso_rate"] = rates["wso_rate"] + emerg_now * wsoi / self.engine.dt
+        rates["lai_rate"] = rates["lai_rate"] + emerg_now * laii_dyn / self.engine.dt
+
         return rates
 
     # ------------------------------------------------------------------ #

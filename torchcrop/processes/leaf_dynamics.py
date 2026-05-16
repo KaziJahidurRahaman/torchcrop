@@ -1,11 +1,30 @@
 """Leaf area growth and senescence.
 
-References:
-    ``Lintul5.java`` (leaf block).
+Ports the Lintul5 ``GLA`` (Growth Leaf Area) and ``DEATHL`` (leaf death)
+subroutines from ``LintulFunctions.java`` together with the ``SLA`` and
+``GLAI``/``DLAI`` block of ``Lintul5.java`` (lines ~1407–1461).
 
-Early exponential LAI growth is driven by temperature (``RGRL``); after
-canopy closure LAI follows leaf weight × SLA. Senescence is driven by self-
-shading, ageing (``RDRTB``), and stress.
+References:
+    * ``simplace/sim/components/models/lintul5/LintulFunctions.java`` —
+      ``GLA`` (lines 998–1021) and ``DEATHL`` (lines 938–977).
+    * ``simplace/sim/components/models/lintul5/Lintul5.java`` — the
+      ``process()`` block that wires SLA, GLAI, DLAI together
+      (lines 1407–1461).
+
+Three growth regimes (precedence: emergence > juvenile > mature):
+
+    * **Emergence day** (``LAI == 0``): ``GLAI = LAII / DELT``.
+    * **Juvenile** (``DVS < 0.2`` *and* ``LAI < 0.75``): exponential
+      ``GLAI = LAI · (exp(RGRLAI · DTEFF) − 1) · TRANRF · exp(−NLAI · (1−NPKI))``.
+    * **Mature**: source-limited ``GLAI = SLA · GLV``.
+
+Senescence aggregates three independent death drivers via ``max``:
+ageing/temperature (``RDRTMP`` indexed by **mean air temperature**, gated
+by ``DVSDLT``), self-shading above ``LAICR``, and drought
+``(1−TRANRF)·RDRL``. Heat stress multiplies the resulting ``RDR`` and the
+result is capped at ``1`` d⁻¹. NPK-driven senescence is **additive**:
+``DLVNS = WLVG · RDRNS · (1−NPKI)`` (with ``DLAINS = DLVNS · SLA``), and
+SLA itself carries an ``exp(−NSLA·(1−NPKI))`` reduction.
 """
 
 from __future__ import annotations
@@ -26,9 +45,12 @@ class LeafDynamics(nn.Module):
         state: ModelState,
         g_lv: torch.Tensor,
         dtsu: torch.Tensor,
+        davtmp: torch.Tensor,
         tranrf: torch.Tensor,
         nstress: torch.Tensor,
         params: CropParameters,
+        heat_stress: torch.Tensor | None = None,
+        emerg: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Compute leaf area and leaf-biomass rates for one day.
 
@@ -36,12 +58,27 @@ class LeafDynamics(nn.Module):
             state: Current state; uses ``state.lai``, ``state.wlv``,
                 ``state.dvs``.
             g_lv: Leaf growth allocated by partitioning [g DM m⁻² d⁻¹],
-                shape ``[B]``.
-            dtsu: Effective thermal time [°C d d⁻¹], shape ``[B]``.
+                shape ``[B]``. Equivalent to Lintul5 ``GLV``.
+            dtsu: Effective thermal time for LAI growth [°C d d⁻¹], shape
+                ``[B]``. Equivalent to Lintul5 ``DTEFF``.
+            davtmp: Mean daily air temperature [°C], shape ``[B]``.
+                Equivalent to Lintul5 ``TMPA`` — drives ``RDRTMP`` via
+                interpolation on ``rdrltb``.
             tranrf: Water-stress factor in ``[0, 1]``, shape ``[B]``.
-            nstress: Nutrient-stress factor in ``[0, 1]``, shape ``[B]``.
-            params: Crop parameters; uses ``laicr``, ``rgrl``, ``sla``,
-                ``rdrshm``, ``rdrtb``.
+            nstress: NPK nutrient index ``NPKI`` in ``[0, 1]``, shape
+                ``[B]``.
+            params: Crop parameters; uses ``laicr``, ``rgrl``, ``slatb``,
+                ``scale_factor_sla``, ``nsla``, ``nlai``, ``laii``,
+                ``rdrshm``, ``rdrl``, ``rdrns``, ``rdrltb``,
+                ``scale_factor_rdr_leaves``, ``dvsdlt``.
+            heat_stress: Optional multiplicative heat-stress factor on
+                ``RDR`` (Lintul5 ``iLeaveSenescenceHeatStressFactor``,
+                default ``1.0``), broadcastable to ``[B]``.
+            emerg: Optional emergence mask in ``{0, 1}`` (broadcast to
+                ``[B]``). Matches Lintul5 ``EMERG``: when ``0``, both
+                ``GLAI`` and ``DLV``/``DLAI`` are forced to zero (so
+                pre-emergence leaves neither grow nor senesce). Default
+                is derived from ``state.tsump >= params.tsumem``.
 
         Returns:
             Dict of ``[B]`` tensors grouped as follows.
@@ -49,54 +86,106 @@ class LeafDynamics(nn.Module):
             Rate variables (consumed by the engine for state update):
 
                 * ``lai_rate`` [m² m⁻² d⁻¹] — Net daily change in LAI
-                  (``= lai_growth - lai_sen``).
+                  (``= glai − dlai``).
                 * ``wlv_rate`` [g DM m⁻² d⁻¹] — Net daily change in green
-                  leaf weight (``= g_lv - wlv * rdr_stress``).
+                  leaf weight (``= g_lv − dlv``).
                 * ``wlvd_rate`` [g DM m⁻² d⁻¹] — Daily senesced leaf mass
-                  transferred into the dead-leaf pool ``wlvd``.
+                  transferred into the dead-leaf pool ``wlvd``
+                  (``= dlv``).
 
             Diagnostics:
 
-                * ``lai_growth`` [m² m⁻² d⁻¹] — Combined exponential +
-                  source-limited (``g_lv * sla``) leaf area growth.
-                * ``lai_sen`` [m² m⁻² d⁻¹] — Daily LAI loss to senescence.
-                * ``rdr`` [d⁻¹] — Effective relative death rate after
-                  shading and stress amplification, clamped to ≤ 0.1.
+                * ``lai_growth`` [m² m⁻² d⁻¹] — Daily LAI growth (GLA).
+                * ``lai_sen`` [m² m⁻² d⁻¹] — Daily LAI loss to
+                  senescence (DLAI = DLAIS + DLAINS).
+                * ``rdr`` [d⁻¹] — Effective relative death rate (after
+                  heat scaling and ≤ 1 cap), excluding the additive NPK
+                  death.
+                * ``sla`` [m² g⁻¹] — Effective specific leaf area after
+                  NPK reduction.
         """
         lai = state.lai
         wlv = state.wlv
+        dvs = state.dvs
 
-        # Exponential LAI growth in the juvenile phase, limited by the critical LAI
-        juvenile = (lai < params.laicr).to(lai.dtype)
-        glai_exp = lai * (torch.exp(params.rgrl * dtsu) - 1.0) * juvenile
+        if heat_stress is None:
+            heat_stress = torch.ones_like(lai)
+        if emerg is None:
+            emerg = (state.tsump >= params.tsumem).to(lai.dtype)
+        else:
+            emerg = emerg.to(lai.dtype)
 
-        # Source-limited LAI growth once canopy is established
-        glai_src = g_lv * params.sla
+        # ----- SLA with NPK reduction -----
+        # Lintul5.java:1408:
+        #   SLA = cScaleFactorSLA * SLATB(DVS) * exp(-NSLA * (1 - NPKI))
+        sla_base = interpolate(params.slatb, dvs)
+        sla = params.scale_factor_sla * sla_base * torch.exp(
+            -params.nsla * (1.0 - nstress)
+        )
 
-        lai_growth = torch.minimum(glai_exp + glai_src, g_lv * params.sla + glai_exp)
+        # ----- GLA: daily increase in leaf area index -----
+        # LintulFunctions.java:998–1019. Branch precedence in the Java
+        # source (last assignment wins): emergence > juvenile > mature.
+        glai_mature = sla * g_lv
+        glai_juv = (
+            lai
+            * (torch.exp(params.rgrl * dtsu) - 1.0)
+            * tranrf
+            * torch.exp(-params.nlai * (1.0 - nstress))
+        )
+        glai_emerg = torch.broadcast_to(params.laii, lai.shape)
 
-        # Senescence: self-shading above LAI_cr, plus developmental senescence
-        rdr_shade = params.rdrshm * torch.clamp((lai - params.laicr) / _safe(params.laicr), min=0.0)
-        rdr_age = interpolate(params.rdrtb, state.dvs)
-        rdr = torch.maximum(rdr_shade, rdr_age)
+        juv_mask = (dvs < 0.2) & (lai < 0.75)
+        emerg_mask = lai <= 0.0
+        glai = torch.where(
+            emerg_mask,
+            glai_emerg,
+            torch.where(juv_mask, glai_juv, glai_mature),
+        )
 
-        # Add water and N stress amplification (bounded to 0.1 d-1 to avoid blow-up)
-        rdr_stress = rdr * (1.0 + 0.5 * (1.0 - tranrf) + 0.5 * (1.0 - nstress))
-        rdr_stress = torch.clamp(rdr_stress, 0.0, 0.1)
+        # ----- DEATHL: relative death rates -----
+        # LintulFunctions.java:943–948.
+        rdrtmp = interpolate(params.rdrltb, davtmp) * params.scale_factor_rdr_leaves
+        rdrdv = torch.where(dvs < params.dvsdlt, torch.zeros_like(rdrtmp), rdrtmp)
+        rdrsh = torch.clamp(
+            params.rdrshm * (lai - params.laicr) / _safe(params.laicr),
+            min=0.0,
+        )
+        rdrdry = (1.0 - tranrf) * params.rdrl
+        rdr = torch.maximum(torch.maximum(rdrdv, rdrsh), rdrdry) * heat_stress
+        rdr = torch.clamp(rdr, max=1.0)
 
-        lai_sen = lai * rdr_stress
-        wlv_sen = wlv * rdr_stress
+        # Senescence from drivers (max of RDRDV / RDRSH / RDRDRY).
+        # LintulFunctions.java:962–969.
+        dlvs = wlv * rdr
+        dlais = lai * rdr
 
-        lai_rate = lai_growth - lai_sen
-        wlv_rate = g_lv - wlv_sen
+        # Additive NPK senescence. LintulFunctions.java:950–958.
+        # DLVNS = WLVG * RDRNS * (1 - NPKI)  iff NPKI < 1
+        # DLAINS = DLVNS * SLA  (mass→area via SLA, not LAI/WLV ratio)
+        npki_deficit = torch.clamp(1.0 - nstress, min=0.0)
+        dlvns = wlv * params.rdrns * npki_deficit
+        dlains = dlvns * sla
+
+        dlv = dlvs + dlvns
+        dlai = dlais + dlains
+
+        # EMERG gating — Java GLA/DEATHL return 0 when EMERG is false.
+        glai = glai * emerg
+        dlv = dlv * emerg
+        dlai = dlai * emerg
+
+        lai_rate = glai - dlai
+        wlv_rate = g_lv - dlv
 
         return {
             "lai_rate": lai_rate,
             "wlv_rate": wlv_rate,
-            "wlvd_rate": wlv_sen,
-            "lai_growth": lai_growth,
-            "lai_sen": lai_sen,
-            "rdr": rdr_stress,
+            "wlvd_rate": dlv,
+            "lai_growth": glai,
+            "lai_sen": dlai,
+            "rdr": rdr,
+            "sla": sla,
         }
 
 

@@ -28,7 +28,11 @@ def test_gradient_wrt_rue():
     model = Lintul5Model(crop_params=crop_params)
     model = model.double()
     out = model(weather, start_doy=60)
-    out.yield_.sum().backward()
+    # Use total biomass (wlv + wst + wso) as the gradient sink: it is
+    # non-zero whenever any growth happens, regardless of whether DVS
+    # crossed anthesis (which gates storage-organ allocation) within the
+    # 80-day window.
+    out.biomass.sum().backward()
     assert crop_params.ruetb.grad is not None
     assert torch.isfinite(crop_params.ruetb.grad).all()
     assert crop_params.ruetb.grad.abs().sum().item() > 0.0
