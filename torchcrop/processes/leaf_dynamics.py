@@ -2,21 +2,20 @@
 
 Ports the Lintul5 ``GLA`` (Growth Leaf Area) and ``DEATHL`` (leaf death)
 subroutines from ``LintulFunctions.java`` together with the ``SLA`` and
-``GLAI``/``DLAI`` block of ``Lintul5.java`` (lines ~1407–1461).
+``GLAI``/``DLAI`` block of ``Lintul5.java``.
 
 References:
     * ``simplace/sim/components/models/lintul5/LintulFunctions.java`` —
-      ``GLA`` (lines 998–1021) and ``DEATHL`` (lines 938–977).
+      ``GLA`` (lines 998–1021) and ``DEATHL``.
     * ``simplace/sim/components/models/lintul5/Lintul5.java`` — the
-      ``process()`` block that wires SLA, GLAI, DLAI together
-      (lines 1407–1461).
+      ``process()`` block that wires SLA, GLAI, DLAI together.
 
 Three growth regimes (precedence: emergence > juvenile > mature):
 
-    * **Emergence day** (``LAI == 0``): ``GLAI = LAII / DELT``.
-    * **Juvenile** (``DVS < 0.2`` *and* ``LAI < 0.75``): exponential
-      ``GLAI = LAI · (exp(RGRLAI · DTEFF) − 1) · TRANRF · exp(−NLAI · (1−NPKI))``.
-    * **Mature**: source-limited ``GLAI = SLA · GLV``.
+* **Emergence day** (``LAI == 0``): ``GLAI = LAII / DELT``.
+* **Juvenile** (``DVS < 0.2`` *and* ``LAI < 0.75``): exponential
+    ``GLAI = LAI · (exp(RGRLAI · DTEFF) − 1) · TRANRF · exp(−NLAI · (1−NPKI))``.
+* **Mature**: source-limited ``GLAI = SLA · GLV``.
 
 Senescence aggregates three independent death drivers via ``max``:
 ageing/temperature (``RDRTMP`` indexed by **mean air temperature**, gated
