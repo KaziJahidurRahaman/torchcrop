@@ -27,6 +27,7 @@ from torchcrop.processes import (
     Photosynthesis,
     PotentialEvapoTranspiration,
     RootDynamics,
+    StemDynamics,
     StressFactors,
     WaterBalance,
 )
@@ -97,6 +98,7 @@ class Lintul5Model(nn.Module):
         self.partitioning = Partitioning()
         self.leaf_dynamics = LeafDynamics()
         self.root_dynamics = RootDynamics()
+        self.stem_dynamics = StemDynamics()
         self.nutrient_demand = NutrientDemand()
         self.stress = stress_module or StressFactors()
 
@@ -443,6 +445,13 @@ class Lintul5Model(nn.Module):
             params=crop_params,
         )
 
+        # 12. Stem dynamics
+        stem = self.stem_dynamics(
+            state=state,
+            g_st=part["g_st"],
+            params=crop_params,
+        )
+
         # Gate all growth/senescence rates post-maturity
         active = (state.dvs < 2.0).to(davtmp.dtype)
         gate = lambda x: x * active  # noqa: E731
@@ -454,7 +463,8 @@ class Lintul5Model(nn.Module):
             "vern_rate": pheno["vern_rate"],
             "wlv_rate": gate(leaf["wlv_rate"]),
             "wlvd_rate": gate(leaf["wlvd_rate"]),
-            "wst_rate": gate(part["g_st"]),
+            "wst_rate": gate(stem["wst_rate"]),
+            "wstd_rate": gate(stem["wstd_rate"]),
             "wrt_rate": gate(root["wrt_rate"]),
             "wso_rate": gate(part["g_so"]),
             "lai_rate": gate(leaf["lai_rate"]),

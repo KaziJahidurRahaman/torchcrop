@@ -51,6 +51,7 @@ class ModelState:
         wlv: Green leaf dry weight, ``[B]`` [g m⁻²].
         wlvd: Dead leaf dry weight (senesced), ``[B]`` [g m⁻²].
         wst: Stem dry weight, ``[B]`` [g m⁻²].
+        wstd: Dead stem dry weight (senesced), ``[B]`` [g m⁻²].
         wrt: Root dry weight, ``[B]`` [g m⁻²].
         wso: Storage organ dry weight (drives final yield), ``[B]``
             [g m⁻²].
@@ -87,6 +88,7 @@ class ModelState:
     wlv: torch.Tensor  # green leaves
     wlvd: torch.Tensor  # dead leaves
     wst: torch.Tensor  # stems
+    wstd: torch.Tensor  # dead stems
     wrt: torch.Tensor  # roots
     wso: torch.Tensor  # storage organs
 
@@ -162,6 +164,7 @@ class ModelState:
             wlv=zeros.clone(),
             wlvd=zeros.clone(),
             wst=zeros.clone(),
+            wstd=zeros.clone(),
             wrt=zeros.clone(),
             wso=zeros.clone(),
             lai=zeros.clone(),
