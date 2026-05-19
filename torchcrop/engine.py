@@ -177,6 +177,12 @@ def euler_update(state: ModelState, rates: dict[str, torch.Tensor], dt: float) -
                 "akst",
                 "akrt",
                 "akso",
+                "nmin",
+                "pmin",
+                "kmin",
+                "nmint",
+                "pmint",
+                "kmint",
                 "tran_cum",
                 "evap_cum",
             }:

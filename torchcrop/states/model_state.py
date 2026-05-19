@@ -68,6 +68,17 @@ class ModelState:
             storage organs, each ``[B]`` [g N m⁻²].
         aplv, apst, aprt, apso: Phosphorus pools, each ``[B]`` [g P m⁻²].
         aklv, akst, akrt, akso: Potassium pools, each ``[B]`` [g K m⁻²].
+        nmin, pmin, kmin: Mineralisable soil organic N/P/K pools, each
+            ``[B]`` [g X m⁻²]; SIMPLACE ``sNMIN``/``sPMIN``/``sKMIN``.
+            Depleted each day by the mineralisation flux ``RNMINS``
+            (handled with negative-rate sign convention).
+        nmint, pmint, kmint: Directly available inorganic soil N/P/K
+            pools, each ``[B]`` [g X m⁻²]; SIMPLACE
+            ``sNMINT``/``sPMINT``/``sKMINT``. Replenished daily by
+            fertiliser (after recovery fraction) plus mineralisation
+            from ``nmin``/``pmin``/``kmin``, and drawn down by crop
+            uptake (``NUPTR``/``PUPTR``/``KUPTR``). This is the pool
+            that caps soil-limited uptake in IOPT ≥ 3.
         tran_cum: Cumulative actual transpiration, ``[B]`` [mm].
         evap_cum: Cumulative soil evaporation, ``[B]`` [mm].
 
@@ -122,6 +133,14 @@ class ModelState:
     akrt: torch.Tensor
     akso: torch.Tensor
 
+    # Soil mineral pools [g X m-2]
+    nmin: torch.Tensor  # mineralisable organic N pool (sNMIN)
+    pmin: torch.Tensor  # mineralisable organic P pool (sPMIN)
+    kmin: torch.Tensor  # mineralisable organic K pool (sKMIN)
+    nmint: torch.Tensor  # directly available inorganic N pool (sNMINT)
+    pmint: torch.Tensor  # directly available inorganic P pool (sPMINT)
+    kmint: torch.Tensor  # directly available inorganic K pool (sKMINT)
+
     # Optional bookkeeping
     tran_cum: torch.Tensor = field(default=None)  # cumulative transpiration [mm]
     evap_cum: torch.Tensor = field(default=None)  # cumulative evaporation [mm]
@@ -138,6 +157,12 @@ class ModelState:
         wa_lower_i: float = 400.0,
         dslri: float = 3.0,
         dsosi: float = 0.0,
+        nmini: float = 0.0,
+        pmini: float = 0.0,
+        kmini: float = 0.0,
+        nminti: float = 0.0,
+        pminti: float = 0.0,
+        kminti: float = 0.0,
     ) -> "ModelState":
         """Construct a zeroed initial state for a batch.
 
@@ -148,6 +173,16 @@ class ModelState:
             dvsi: Initial development stage ``DVSI``.
             wai: Initial soil water content in the root zone [mm].
             rootdi: Initial rooting depth [m].
+            wa_lower_i: Initial soil water in the lower zone [mm].
+            dslri: Initial days since last rain [d].
+            dsosi: Initial days of oxygen shortage [d].
+            nmini: Initial mineralisable organic N pool ``NMIN`` [g N m⁻²].
+            pmini: Initial mineralisable organic P pool ``PMIN`` [g P m⁻²].
+            kmini: Initial mineralisable organic K pool ``KMIN`` [g K m⁻²].
+            nminti: Initial directly available inorganic N pool ``NMINT``
+                [g N m⁻²]. SIMPLACE default is 0.
+            pminti: Initial directly available inorganic P pool.
+            kminti: Initial directly available inorganic K pool.
 
         Returns:
             A fresh `ModelState` with all biomass / nutrient pools at
@@ -185,6 +220,12 @@ class ModelState:
             akst=zeros.clone(),
             akrt=zeros.clone(),
             akso=zeros.clone(),
+            nmin=full(nmini),
+            pmin=full(pmini),
+            kmin=full(kmini),
+            nmint=full(nminti),
+            pmint=full(pminti),
+            kmint=full(kminti),
             tran_cum=zeros.clone(),
             evap_cum=zeros.clone(),
         )

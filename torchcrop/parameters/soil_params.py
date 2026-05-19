@@ -141,45 +141,55 @@ class SoilParameters:
     sensitivity analysis / calibration."""
 
     # ------------------------------------------------------------------ #
-    # 6. Soil mineral nutrient supply (background mineralisation)
+    # 6. Soil mineral nutrient supply (mineralisation kinetics)
     # ------------------------------------------------------------------ #
+    # The full Lintul5 NPK chain integrates two state pools per nutrient
+    # (organic ``NMIN`` and inorganic ``NMINT``) updated daily by
+    # ``SoilNutrients``. The constants below specify the *kinetics* of
+    # that integration — the *current* pool levels live on `ModelState`.
 
-    nmins: torch.Tensor = field(default_factory=lambda: _t(0.50))
-    """Background daily mineralisation supply of plant-available
-    soil N [g N · m⁻² · d⁻¹]. (Simplified surrogate of the SIMPLACE
-    ``cRTNMINS`` × ``sNMIN`` flux.)"""
-
-    pmins: torch.Tensor = field(default_factory=lambda: _t(0.05))
-    """Background daily supply of plant-available soil P
-    [g P · m⁻² · d⁻¹]."""
-
-    kmins: torch.Tensor = field(default_factory=lambda: _t(0.30))
-    """Background daily supply of plant-available soil K
-    [g K · m⁻² · d⁻¹]."""
-
-    rtnmins: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    rtnmins: torch.Tensor = field(default_factory=lambda: _t(0.01))
     """``cRTNMINS``. Fraction [d⁻¹] of the soil organic-N pool that
-    becomes mineralised and plant-available per day."""
+    becomes mineralised and plant-available per day. Multiplied by the
+    *initial* organic pool ``nmini`` (Lintul5 convention) and capped by
+    the current ``NMIN``. Default 0.01 gives a steady-state daily
+    mineralisation of ``0.01 × nmini`` g N m⁻² d⁻¹."""
 
-    rtpmins: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    rtpmins: torch.Tensor = field(default_factory=lambda: _t(0.01))
     """``cRTPMINS``. Fraction [d⁻¹] of soil P becoming available per
-    day."""
+    day. Default 0.01."""
 
-    rtkmins: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    rtkmins: torch.Tensor = field(default_factory=lambda: _t(0.01))
     """``cRTKMINS``. Fraction [d⁻¹] of soil K becoming available per
-    day."""
+    day. Default 0.01."""
 
-    nmini: torch.Tensor = field(default_factory=lambda: _t(0.0))
-    """``cNMINI``. Initial amount [g N m⁻²] (at crop emergence) of
-    potentially available soil organic N."""
+    nmini: torch.Tensor = field(default_factory=lambda: _t(50.0))
+    """``cNMINI``. Initial amount [g N m⁻²] of mineralisable soil
+    organic N at crop emergence; this seeds `ModelState.nmin`. Default
+    50 g/m² (~500 kg N/ha) combined with ``rtnmins=0.01`` produces a
+    steady-state mineralisation flux of 0.5 g N m⁻² d⁻¹, matching the
+    previous scalar surrogate."""
 
-    pmini: torch.Tensor = field(default_factory=lambda: _t(0.0))
-    """``cPMINI``. Initial amount [g P m⁻²] of potentially available
-    soil P."""
+    pmini: torch.Tensor = field(default_factory=lambda: _t(5.0))
+    """``cPMINI``. Initial mineralisable organic P pool [g P m⁻²].
+    Default 5 g/m² × ``rtpmins=0.01`` ⇒ 0.05 g P m⁻² d⁻¹ steady-state
+    supply."""
 
-    kmini: torch.Tensor = field(default_factory=lambda: _t(0.0))
-    """``cKMINI``. Initial amount [g K m⁻²] of potentially available
-    soil K."""
+    kmini: torch.Tensor = field(default_factory=lambda: _t(30.0))
+    """``cKMINI``. Initial mineralisable organic K pool [g K m⁻²].
+    Default 30 g/m² × ``rtkmins=0.01`` ⇒ 0.30 g K m⁻² d⁻¹ steady-state
+    supply."""
+
+    nminti: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Initial directly available inorganic N pool ``NMINT`` [g N m⁻²]
+    at sowing/emergence. SIMPLACE default is 0; raise this to represent
+    residual mineral N at planting."""
+
+    pminti: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Initial directly available inorganic P pool."""
+
+    kminti: torch.Tensor = field(default_factory=lambda: _t(0.0))
+    """Initial directly available inorganic K pool."""
 
     # ------------------------------------------------------------------ #
     # Helpers

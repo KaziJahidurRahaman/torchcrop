@@ -27,6 +27,7 @@ from torchcrop.processes import (
     Photosynthesis,
     PotentialEvapoTranspiration,
     RootDynamics,
+    SoilNutrients,
     StemDynamics,
     StressFactors,
     WaterBalance,
@@ -100,6 +101,7 @@ class Lintul5Model(nn.Module):
         self.root_dynamics = RootDynamics()
         self.stem_dynamics = StemDynamics()
         self.nutrient_demand = NutrientDemand()
+        self.soil_nutrients = SoilNutrients()
         self.stress = stress_module or StressFactors()
 
         self.residual_modules = nn.ModuleDict(residual_modules or {})
@@ -143,6 +145,16 @@ class Lintul5Model(nn.Module):
         rdm_val = min(rdmso, rdmcr)
         wci_lower = float(self.soil_params.wci_lower.detach().cpu().item())
         wa_lower_i = 1000.0 * max(rdm_val - rootdi, 1e-4) * wci_lower
+        # Seed the soil mineral pools from soil_params. The organic
+        # pools (NMIN/PMIN/KMIN) start at NMINI/PMINI/KMINI; the
+        # directly available inorganic pools (NMINT/PMINT/KMINT) start
+        # at NMINTI/PMINTI/KMINTI (Lintul5 default 0).
+        nmini = float(self.soil_params.nmini.detach().cpu().item())
+        pmini = float(self.soil_params.pmini.detach().cpu().item())
+        kmini = float(self.soil_params.kmini.detach().cpu().item())
+        nminti = float(self.soil_params.nminti.detach().cpu().item())
+        pminti = float(self.soil_params.pminti.detach().cpu().item())
+        kminti = float(self.soil_params.kminti.detach().cpu().item())
         state = ModelState.initial(
             batch_size=batch_size,
             dtype=dtype,
@@ -153,6 +165,12 @@ class Lintul5Model(nn.Module):
             wa_lower_i=wa_lower_i,
             dslri=3.0,
             dsosi=0.0,
+            nmini=nmini,
+            pmini=pmini,
+            kmini=kmini,
+            nminti=nminti,
+            pminti=pminti,
+            kminti=kminti,
         )
         # Sowing-day state: bare soil, no canopy. The Lintul5.java
         # initValues block (lines 793–810) seeds WLVGI/WSTI/WRTI/WSOI/LAII,
@@ -379,14 +397,27 @@ class Lintul5Model(nn.Module):
         )
         nut = self.nutrient_demand(
             state=state,
-            g_lv=part_pre["g_lv"],
-            g_st=part_pre["g_st"],
-            g_rt=part_pre["g_root"],
-            g_so=part_pre["g_so"],
+            crop_params=crop_params,
+            soil_params=soil_params,
+            tranrf=tranrf,
+        )
+        nstress = nut["nstress"]
+
+        # Soil mineral-pool balance (SoilNutrientRates in Lintul5.java).
+        # Sits *after* NutrientDemand because it consumes the day's
+        # NUPTR/PUPTR/KUPTR (depletes NMINT/PMINT/KMINT) and the same
+        # NLIMIT/EMERG gates used by uptake.
+        soil_nut = self.soil_nutrients(
+            state=state,
+            nuptr=nut["nuptr"],
+            puptr=nut["puptr"],
+            kuptr=nut["kuptr"],
+            nlimit=nut["nlimit"],
+            emerg=nut["emerg"],
+            doy=doy,
             crop_params=crop_params,
             soil_params=soil_params,
         )
-        nstress = nut["nstress"]
 
         # 8. Photosynthesis (final) with nutrient + water stress
         photo = self.photosynthesis(
@@ -485,6 +516,20 @@ class Lintul5Model(nn.Module):
             "akst_rate": gate(nut["k_st_rate"]),
             "akrt_rate": gate(nut["k_rt_rate"]),
             "akso_rate": gate(nut["k_so_rate"]),
+            # Soil pool dynamics: organic pool depletion (negative
+            # rates) and inorganic pool balance (fertiliser +
+            # mineralisation − uptake). Mineralisation is already gated
+            # internally by EMERG/NLIMIT; we deliberately do *not*
+            # multiply by ``active`` so that mineralisation and
+            # fertiliser additions to NMINT continue post-maturity
+            # (matches SIMPLACE — the soil keeps running even when the
+            # crop has died).
+            "nmin_rate": soil_nut["nmin_rate"],
+            "pmin_rate": soil_nut["pmin_rate"],
+            "kmin_rate": soil_nut["kmin_rate"],
+            "nmint_rate": soil_nut["nmint_rate"],
+            "pmint_rate": soil_nut["pmint_rate"],
+            "kmint_rate": soil_nut["kmint_rate"],
             "tran_cum_rate": water["tran"],
             "evap_cum_rate": water["evap"],
             # Diagnostics (not integrated)
